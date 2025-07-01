@@ -431,46 +431,6 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
     {"service_type": "drive", "scopes": "drive_read", "param_name": "drive_service"},
     {"service_type": "docs", "scopes": "docs_read", "param_name": "docs_service"}
 ])
-@handle_http_errors("get_doc_content_with_tabs")
-async def get_doc_content_with_tabs(
-    drive_service,
-    docs_service,
-    user_google_email: str,
-    document_id: str,
-) -> str:
-    """
-    Retrieves content of a Google Doc including tabs content using the includeTabsContent parameter.
-    This function is specifically designed for documents that contain tabs and need the complete content structure.
-    
-    Returns:
-        str: The document content with tabs information and metadata header.
-    """
-    try:
-        # Get the document with tabs content included
-        doc_data = _extract_document_content_with_tabs(docs_service, document_id)
-        
-        # Get file metadata
-        file_info = drive_service.files().get(fileId=document_id, fields='name,mimeType,webViewLink,modifiedTime').execute()
-        
-        # Build the response
-        processed_content = []
-        processed_content.append(f'File: "{file_info["name"]}" (ID: {document_id}, Type: {file_info["mimeType"]})')
-        processed_content.append(f'Link: {file_info["webViewLink"]}')
-        processed_content.append(f'Tabs Content Included: True')
-        processed_content.append('')
-        processed_content.append(doc_data['content'])
-        
-        return '\n'.join(processed_content)
-        
-    except Exception as e:
-        return f"Error reading document: {str(e)}"
-
-
-@server.tool()
-@require_multiple_services([
-    {"service_type": "drive", "scopes": "drive_read", "param_name": "drive_service"},
-    {"service_type": "docs", "scopes": "docs_read", "param_name": "docs_service"}
-])
 @handle_http_errors("get_specific_tab_content")
 async def get_specific_tab_content(
     drive_service,
