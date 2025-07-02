@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 
 WORKSPACE_MCP_PORT = int(os.getenv("PORT", os.getenv("WORKSPACE_MCP_PORT", 8000)))
 WORKSPACE_MCP_BASE_URI = os.getenv("WORKSPACE_MCP_BASE_URI", "http://localhost")
+USER_GOOGLE_EMAIL = os.getenv("USER_GOOGLE_EMAIL", None)
 
 # Transport mode detection (will be set by main.py)
 _current_transport_mode = "stdio"  # Default to stdio
@@ -157,8 +158,8 @@ async def oauth2_callback(request: Request) -> HTMLResponse:
 
 @server.tool()
 async def start_google_auth(
-    user_google_email: str,
     service_name: str,
+    user_google_email: str = USER_GOOGLE_EMAIL,
     mcp_session_id: Optional[str] = Header(None, alias="Mcp-Session-Id")
 ) -> str:
     """
