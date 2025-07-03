@@ -34,6 +34,14 @@
 
 ---
 
+### A quick plug for AI-Enhanced Docs
+
+> **This README was crafted with AI assistance, and here's why that matters**
+> 
+> As a solo developer building open source tools that may only ever serve my own needs, comprehensive documentation often wouldn't happen without AI help. Using agentic dev tools like **Roo** & **Claude Code** that understand the entire codebase, AI doesn't just regurgitate generic content - it extracts real implementation details and creates accurate, specific documentation.
+>
+> In this case, Sonnet 4 took a pass & a human (me) verified them 6/28/25.
+
 
 ## 🌐 Overview
 
@@ -60,9 +68,13 @@ A production-ready MCP server that integrates all major Google Workspace service
 
 ### Simplest Start (uvx - Recommended)
 
-> Run instantly without manual installation - you must set the `GOOGLE_CLIENT_SECRETS` environment variable with the path to your `client_secret.json` when using uvx as you won't have a repo directory to pull from.
+> Run instantly without manual installation - you must configure OAuth credentials when using uvx. You can use either environment variables (recommended for production) or set the `GOOGLE_CLIENT_SECRET_PATH` (or legacy `GOOGLE_CLIENT_SECRETS`) environment variable to point to your `client_secret.json` file.
 
 ```bash
+# Set OAuth credentials via environment variables (recommended)
+export GOOGLE_OAUTH_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+export GOOGLE_OAUTH_CLIENT_SECRET="your-client-secret"
+
 # Start the server with all Google Workspace tools
 uvx workspace-mcp
 
@@ -96,9 +108,31 @@ uv run main.py
 1. **Google Cloud Setup**:
    - Create OAuth 2.0 credentials (web application) in [Google Cloud Console](https://console.cloud.google.com/)
    - Enable APIs: Calendar, Drive, Gmail, Docs, Sheets, Slides, Forms, Chat
-   - Download credentials as `client_secret.json` in project root
-     - To use a different location for `client_secret.json`, you can set the `GOOGLE_CLIENT_SECRETS` environment variable with that path
    - Add redirect URI: `http://localhost:8000/oauth2callback`
+   - Configure credentials using one of these methods:
+
+     **Option A: Environment Variables (Recommended for Production)**
+     ```bash
+     export GOOGLE_OAUTH_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+     export GOOGLE_OAUTH_CLIENT_SECRET="your-client-secret"
+     export GOOGLE_OAUTH_REDIRECT_URI="http://localhost:8000/oauth2callback"  # Optional
+     ```
+
+     **Option B: File-based (Traditional)**
+     - Download credentials as `client_secret.json` in project root
+     - To use a different location, set `GOOGLE_CLIENT_SECRET_PATH` (or legacy `GOOGLE_CLIENT_SECRETS`) environment variable with the file path
+
+   **Credential Loading Priority**:
+   1. Environment variables (`GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`)
+   2. File specified by `GOOGLE_CLIENT_SECRET_PATH` or `GOOGLE_CLIENT_SECRETS` environment variable
+   3. Default file (`client_secret.json` in project root)
+
+   **Why Environment Variables?**
+   - ✅ Containerized deployments (Docker, Kubernetes)
+   - ✅ Cloud platforms (Heroku, Railway, etc.)
+   - ✅ CI/CD pipelines
+   - ✅ No secrets in version control
+   - ✅ Easy credential rotation
 
 2. **Environment**:
    ```bash
@@ -156,7 +190,11 @@ python install_claude.py
   "mcpServers": {
     "google_workspace": {
       "command": "uvx",
-      "args": ["workspace-mcp"]
+      "args": ["workspace-mcp"],
+      "env": {
+        "GOOGLE_OAUTH_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "your-client-secret"
+      }
     }
   }
 }
@@ -169,7 +207,11 @@ python install_claude.py
     "google_workspace": {
       "command": "uv",
       "args": ["run", "main.py"],
-      "cwd": "/path/to/google_workspace_mcp"
+      "cwd": "/path/to/google_workspace_mcp",
+      "env": {
+        "GOOGLE_OAUTH_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "your-client-secret"
+      }
     }
   }
 }
