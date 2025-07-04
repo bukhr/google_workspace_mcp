@@ -3,6 +3,7 @@ Google Docs MCP Tools
 
 This module provides MCP tools for interacting with Google Docs API and managing Google Docs via Drive.
 """
+import pdb
 import asyncio
 import logging
 import io
@@ -348,10 +349,11 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
     # Structure tabs data for easy access
     tabs_data = {}
     tabs = doc_data.get('tabs', [])
-    
+    pdb.set_trace()
     if tabs:
         processed_content.append("\n=== TABS CONTENT ===")
         for i, tab in enumerate(tabs):
+            pdb.set_trace()
             tab_id = tab.get('tabId', f'tab_{i}')
             
             # Store tab data in structured format
@@ -426,311 +428,305 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
     return result
 
 
+def _extract_tab_id_from_url(url_or_id: str) -> str:
+    """
+    Extract tab ID from Google Docs URL or return the ID as-is if it's already a tab ID.
+    
+    Args:
+        url_or_id: Either a Google Docs URL with tab parameter or a direct tab ID
+        
+    Returns:
+        str: Extracted or original tab ID
+    """
+    if url_or_id.startswith('http'):
+        # Extract from URL: https://docs.google.com/document/d/.../edit?tab=t.xyz
+        import urllib.parse
+        parsed = urllib.parse.urlparse(url_or_id)
+        query_params = urllib.parse.parse_qs(parsed.query)
+        if 'tab' in query_params:
+            return query_params['tab'][0]  # Return first tab parameter
+    return url_or_id  # Return as-is if not a URL
+
+
 @server.tool()
 @require_multiple_services([
     {"service_type": "drive", "scopes": "drive_read", "param_name": "drive_service"},
     {"service_type": "docs", "scopes": "docs_read", "param_name": "docs_service"}
 ])
-@handle_http_errors("get_subtab_content")
-async def get_subtab_content(
+@handle_http_errors("get_tab_content")
+async def get_tab_content(
     drive_service,
     docs_service,
     user_google_email: str,
     document_id: str,
-    parent_tab_id: str,
-    subtab_id: str,
+    tab_identifier: str,
+    parent_tab_id: Optional[str] = None,
+    search_by_name: bool = False,
 ) -> str:
     """
-    Retrieves content of a specific subtab from a Google Doc by parent tab ID and subtab ID.
-    Returns only the information related to the specified subtab.
+    Unified function to retrieve content of tabs or subtabs from a Google Doc.
+    Supports both direct IDs, Google Docs URLs with tab parameters, and searching by name.
     
     Args:
         user_google_email: The user's Google email address
         document_id: The ID of the Google Document
-        parent_tab_id: The ID of the parent tab that contains the subtab
-        subtab_id: The ID of the specific subtab to retrieve content from
+        tab_identifier: Tab ID, subtab ID, tab name, or Google Docs URL with tab parameter
+        parent_tab_id: Optional parent tab ID (required for subtabs)
+        search_by_name: If True, searches for tabs/subtabs by name instead of ID
     
     Returns:
-        str: The content of the specified subtab with metadata header.
+        str: The content of the specified tab/subtab with metadata header.
     """
+    # Extract tab ID from URL if needed
+    tab_id = _extract_tab_id_from_url(tab_identifier)
+    
+    logger.info(f"[get_tab_content] Getting content for document {document_id}, tab: {tab_id}, parent: {parent_tab_id}, search_by_name: {search_by_name}")
+    
     try:
-        # Use the cached extraction function
-        doc_data = _extract_document_content_with_tabs(docs_service, document_id)
+        # Extract document content with tabs
+        doc_result = await asyncio.to_thread(
+            _extract_document_content_with_tabs,
+            docs_service,
+            document_id
+        )
         
-        # Get file metadata
-        file_info = drive_service.files().get(fileId=document_id, fields='name,mimeType,webViewLink,modifiedTime').execute()
+        tabs_data = doc_result.get('tabs_data', {})
+        doc_title = doc_result.get('title', 'Unknown Document')
+        doc_link = f"https://docs.google.com/document/d/{document_id}/edit?usp=drivesdk"
         
-        # Build response header
-        response_parts = []
-        response_parts.append(f'File: "{file_info["name"]}" (ID: {document_id}, Type: {file_info["mimeType"]})')
-        response_parts.append(f'Link: {file_info["webViewLink"]}')
-        response_parts.append(f'Parent Tab ID: {parent_tab_id}')
-        response_parts.append(f'Requested Subtab ID: {subtab_id}')
-        response_parts.append('')
+        response_parts = [
+            f'File: "{doc_title}" (ID: {document_id}, Type: application/vnd.google-apps.document)',
+            f'Link: {doc_link}',
+            f'Requested Tab ID: {tab_id}',
+            ''
+        ]
         
-        # Look for the parent tab in cached data
-        tabs_data = doc_data.get('tabs_data', {})
-        
-        if parent_tab_id not in tabs_data:
-            response_parts.append(f'--- PARENT TAB NOT FOUND: {parent_tab_id} ---')
-            response_parts.append('\nAvailable tabs:')
-            for available_tab_id, tab_info in tabs_data.items():
-                properties = tab_info.get('properties', {})
-                title = properties.get('title', 'Untitled Tab')
-                response_parts.append(f'- Tab ID: {available_tab_id} | Title: "{title}"')
-            return '\n'.join(response_parts)
-        
-        parent_tab = tabs_data[parent_tab_id]
-        child_tabs = parent_tab.get('child_tabs', {})
-        
-        if subtab_id in child_tabs:
-            subtab_info = child_tabs[subtab_id]
-            response_parts.append(f'--- SUBTAB FOUND: {subtab_id} ---')
+        # If search_by_name is True, find tab/subtab by name instead of ID
+        if search_by_name:
+            search_lower = tab_id.lower()
+            matches = []
             
-            # Add parent tab info
-            parent_properties = parent_tab.get('properties', {})
-            parent_title = parent_properties.get('title', 'Untitled Parent Tab')
-            response_parts.append(f'Parent Tab: {parent_title} (ID: {parent_tab_id})')
-            
-            # Add subtab properties
-            subtab_properties = subtab_info.get('properties', {})
-            if subtab_properties:
-                subtab_title = subtab_properties.get('title', 'Untitled Subtab')
-                subtab_index = subtab_properties.get('index', 0)
-                response_parts.append(f'Subtab Title: {subtab_title}')
-                response_parts.append(f'Subtab Index: {subtab_index}')
-            
-            response_parts.append('')
-            
-            # Add only subtab content
-            subtab_content = subtab_info.get('content', [])
-            if subtab_content:
-                response_parts.append('--- SUBTAB CONTENT ---')
-                response_parts.extend(subtab_content)
-            else:
-                response_parts.append('--- NO CONTENT IN SUBTAB ---')
+            # Search through all tabs and subtabs by name
+            for tab_id_key, tab_info in tabs_data.items():
+                tab_properties = tab_info.get('properties', {})
+                tab_title = tab_properties.get('title', 'Untitled Tab')
                 
-        else:
-            # Subtab not found, list available subtabs in parent tab
-            response_parts.append(f'--- SUBTAB NOT FOUND: {subtab_id} ---')
-            parent_properties = parent_tab.get('properties', {})
-            parent_title = parent_properties.get('title', 'Untitled Parent Tab')
-            response_parts.append(f'Parent Tab: {parent_title} (ID: {parent_tab_id})')
-            response_parts.append('')
-            
-            if child_tabs:
-                response_parts.append('Available subtabs in this parent tab:')
-                for available_subtab_id, subtab_info in child_tabs.items():
+                # Check if main tab title matches
+                if search_lower in tab_title.lower():
+                    matches.append({
+                        'type': 'tab',
+                        'id': tab_id_key,
+                        'title': tab_title,
+                        'content': tab_info.get('content', []),
+                        'parent_id': None,
+                        'parent_title': None
+                    })
+                
+                # Check subtabs
+                child_tabs = tab_info.get('child_tabs', {})
+                for subtab_id, subtab_info in child_tabs.items():
                     subtab_properties = subtab_info.get('properties', {})
                     subtab_title = subtab_properties.get('title', 'Untitled Subtab')
-                    response_parts.append(f'- Subtab ID: {available_subtab_id} | Title: "{subtab_title}"')
-            else:
-                response_parts.append('No subtabs found in this parent tab.')
-        
-        return '\n'.join(response_parts)
-        
-    except Exception as e:
-        return f"Error reading document subtab: {str(e)}"
-
-
-@server.tool()
-@require_multiple_services([
-    {"service_type": "drive", "scopes": "drive_read", "param_name": "drive_service"},
-    {"service_type": "docs", "scopes": "docs_read", "param_name": "docs_service"}
-])
-@handle_http_errors("search_subtabs")
-async def search_subtabs(
-    drive_service,
-    docs_service,
-    user_google_email: str,
-    document_id: str,
-    search_query: str,
-) -> str:
-    """
-    Searches for subtabs in a Google Doc by title or ID (partial match).
-    Returns information about matching subtabs and their content.
-    
-    Args:
-        user_google_email: The user's Google email address
-        document_id: The ID of the Google Document
-        search_query: The search term to match against subtab titles or IDs
-    
-    Returns:
-        str: Information about matching subtabs with their content.
-    """
-    try:
-        # Use the cached extraction function
-        doc_data = _extract_document_content_with_tabs(docs_service, document_id)
-        
-        # Get file metadata
-        file_info = drive_service.files().get(fileId=document_id, fields='name,mimeType,webViewLink,modifiedTime').execute()
-        
-        # Build response header
-        response_parts = []
-        response_parts.append(f'File: "{file_info["name"]}" (ID: {document_id}, Type: {file_info["mimeType"]})')
-        response_parts.append(f'Link: {file_info["webViewLink"]}')
-        response_parts.append(f'Search Query: "{search_query}"')
-        response_parts.append('')
-        
-        # Search for subtabs matching the query
-        tabs_data = doc_data.get('tabs_data', {})
-        matches = []
-        search_lower = search_query.lower()
-        
-        for parent_tab_id, parent_tab in tabs_data.items():
-            child_tabs = parent_tab.get('child_tabs', {})
-            parent_properties = parent_tab.get('properties', {})
-            parent_title = parent_properties.get('title', 'Untitled Parent Tab')
-            
-            for subtab_id, subtab_info in child_tabs.items():
-                subtab_properties = subtab_info.get('properties', {})
-                subtab_title = subtab_properties.get('title', 'Untitled Subtab')
-                
-                # Check if search query matches subtab ID or title
-                if (search_lower in subtab_id.lower() or 
-                    search_lower in subtab_title.lower()):
-                    matches.append({
-                        'parent_tab_id': parent_tab_id,
-                        'parent_title': parent_title,
-                        'subtab_id': subtab_id,
-                        'subtab_title': subtab_title,
-                        'subtab_info': subtab_info
-                    })
-        
-        if matches:
-            response_parts.append(f'--- FOUND {len(matches)} MATCHING SUBTAB(S) ---')
-            response_parts.append('')
-            
-            for i, match in enumerate(matches, 1):
-                response_parts.append(f'Match {i}:')
-                response_parts.append(f'  Parent Tab: {match["parent_title"]} (ID: {match["parent_tab_id"]})')
-                response_parts.append(f'  Subtab: {match["subtab_title"]} (ID: {match["subtab_id"]})')
-                
-                # Add subtab content
-                subtab_content = match['subtab_info'].get('content', [])
-                if subtab_content:
-                    response_parts.append('  Content:')
-                    for line in subtab_content[:10]:  # Limit to first 10 lines
-                        response_parts.append(f'    {line}')
-                    if len(subtab_content) > 10:
-                        response_parts.append(f'    ... ({len(subtab_content) - 10} more lines)')
-                else:
-                    response_parts.append('  Content: (No content)')
                     
-                response_parts.append('')  # Add spacing between matches
-                
-        else:
-            response_parts.append('--- NO MATCHING SUBTABS FOUND ---')
-            response_parts.append('')
-            response_parts.append('Available subtabs in this document:')
+                    if search_lower in subtab_title.lower():
+                        matches.append({
+                            'type': 'subtab',
+                            'id': subtab_id,
+                            'title': subtab_title,
+                            'content': subtab_info.get('content', []),
+                            'parent_id': tab_id_key,
+                            'parent_title': tab_title
+                        })
             
-            subtab_count = 0
-            for parent_tab_id, parent_tab in tabs_data.items():
+            if matches:
+                response_parts.append(f'--- FOUND {len(matches)} MATCH(ES) BY NAME ---')
+                response_parts.append('')
+                
+                for i, match in enumerate(matches, 1):
+                    response_parts.append(f'Match {i} ({match["type"].upper()}):')
+                    if match['type'] == 'subtab':
+                        response_parts.extend([
+                            f'Parent Tab: {match["parent_title"]} (ID: {match["parent_id"]})',
+                            f'Subtab: {match["title"]} (ID: {match["id"]})',
+                            '--- SUBTAB CONTENT ---'
+                        ])
+                    else:
+                        response_parts.extend([
+                            f'Tab: {match["title"]} (ID: {match["id"]})',
+                            '--- TAB CONTENT ---'
+                        ])
+                    
+                    # Add content
+                    content = match['content']
+                    if content:
+                        response_parts.extend(content)
+                    else:
+                        response_parts.append('No content found.')
+                    
+                    response_parts.append('')  # Spacing between matches
+            else:
+                response_parts.extend([
+                    f'--- NO MATCHES FOUND FOR NAME: "{tab_id}" ---',
+                    '',
+                    'Available tabs and subtabs in this document:'
+                ])
+                
+                for tab_id_key, tab_info in tabs_data.items():
+                    tab_properties = tab_info.get('properties', {})
+                    tab_title = tab_properties.get('title', 'Untitled Tab')
+                    response_parts.append(f'- Tab: "{tab_title}" (ID: {tab_id_key})')
+                    
+                    child_tabs = tab_info.get('child_tabs', {})
+                    for subtab_id, subtab_info in child_tabs.items():
+                        subtab_properties = subtab_info.get('properties', {})
+                        subtab_title = subtab_properties.get('title', 'Untitled Subtab')
+                        response_parts.append(f'  - Subtab: "{subtab_title}" (ID: {subtab_id})')
+            
+            return '\n'.join(response_parts)
+        
+        # If parent_tab_id is provided, look for subtab
+        if parent_tab_id:
+            if parent_tab_id in tabs_data:
+                parent_tab = tabs_data[parent_tab_id]
+                parent_properties = parent_tab.get('properties', {})
+                parent_title = parent_properties.get('title', 'Untitled Tab')
                 child_tabs = parent_tab.get('child_tabs', {})
-                if child_tabs:
-                    parent_properties = parent_tab.get('properties', {})
-                    parent_title = parent_properties.get('title', 'Untitled Parent Tab')
-                    response_parts.append(f'\nParent Tab: {parent_title} (ID: {parent_tab_id})')
+                
+                response_parts.append(f'Parent Tab ID: {parent_tab_id}')
+                
+                # Try to find subtab by exact ID match first
+                target_subtab = None
+                target_subtab_id = None
+                
+                for subtab_id, subtab_info in child_tabs.items():
+                    if subtab_id == tab_id:
+                        target_subtab = subtab_info
+                        target_subtab_id = subtab_id
+                        break
+                
+                # If not found by exact match, try partial match on web tab ID
+                if not target_subtab:
+                    for subtab_id, subtab_info in child_tabs.items():
+                        subtab_properties = subtab_info.get('properties', {})
+                        # Check if the web tab ID might correspond to this subtab
+                        if tab_id.startswith('t.') and subtab_properties.get('index') is not None:
+                            target_subtab = subtab_info
+                            target_subtab_id = subtab_id
+                            break
+                
+                if target_subtab:
+                    subtab_properties = target_subtab.get('properties', {})
+                    subtab_title = subtab_properties.get('title', 'Untitled Subtab')
+                    subtab_index = subtab_properties.get('index', 0)
+                    
+                    response_parts.extend([
+                        f'--- SUBTAB FOUND: {target_subtab_id} ---',
+                        f'Parent Tab: {parent_title} (ID: {parent_tab_id})',
+                        f'Subtab Title: {subtab_title}',
+                        f'Subtab Index: {subtab_index}',
+                        '',
+                        '--- SUBTAB CONTENT ---'
+                    ])
+                    
+                    # Extract content for this specific subtab
+                    subtab_content = target_subtab.get('content', [])
+                    if subtab_content:
+                        response_parts.extend(subtab_content)
+                    else:
+                        response_parts.append('No content found in this subtab.')
+                else:
+                    response_parts.extend([
+                        f'--- SUBTAB NOT FOUND: {tab_id} ---',
+                        f'Parent Tab: {parent_title} (ID: {parent_tab_id})',
+                        '',
+                        'Available subtabs in this parent tab:'
+                    ])
                     
                     for subtab_id, subtab_info in child_tabs.items():
                         subtab_properties = subtab_info.get('properties', {})
                         subtab_title = subtab_properties.get('title', 'Untitled Subtab')
-                        response_parts.append(f'  - Subtab: {subtab_title} (ID: {subtab_id})')
-                        subtab_count += 1
-            
-            if subtab_count == 0:
-                response_parts.append('No subtabs found in this document.')
+                        response_parts.append(f'- Subtab ID: {subtab_id} | Title: "{subtab_title}"')
+            else:
+                response_parts.append(f'Parent tab {parent_tab_id} not found.')
         
-        return '\n'.join(response_parts)
-        
-    except Exception as e:
-        return f"Error searching subtabs: {str(e)}"
-
-
-@server.tool()
-@require_multiple_services([
-    {"service_type": "drive", "scopes": "drive_read", "param_name": "drive_service"},
-    {"service_type": "docs", "scopes": "docs_read", "param_name": "docs_service"}
-])
-@handle_http_errors("get_specific_tab_content")
-async def get_specific_tab_content(
-    drive_service,
-    docs_service,
-    user_google_email: str,
-    document_id: str,
-    tab_id: str,
-) -> str:
-    """
-    Retrieves content of a specific tab from a Google Doc by tab ID.
-    Uses cached document data when available to avoid repeated API calls.
-    
-    Args:
-        user_google_email: The user's Google email address
-        document_id: The ID of the Google Document
-        tab_id: The ID of the specific tab to retrieve content from
-    
-    Returns:
-        str: The content of the specified tab with metadata header.
-    """
-    try:
-        # Use the cached extraction function
-        doc_data = _extract_document_content_with_tabs(docs_service, document_id)
-        
-        # Get file metadata
-        file_info = drive_service.files().get(fileId=document_id, fields='name,mimeType,webViewLink,modifiedTime').execute()
-        
-        # Build response header
-        response_parts = []
-        response_parts.append(f'File: "{file_info["name"]}" (ID: {document_id}, Type: {file_info["mimeType"]})')
-        response_parts.append(f'Link: {file_info["webViewLink"]}')
-        response_parts.append(f'Requested Tab ID: {tab_id}')
-        response_parts.append('')
-        
-        # Look for the specific tab in cached data
-        tabs_data = doc_data.get('tabs_data', {})
-        
-        if tab_id in tabs_data:
-            tab_info = tabs_data[tab_id]
-            response_parts.append(f'--- TAB FOUND: {tab_id} ---')
-            
-            # Add tab properties
-            properties = tab_info.get('properties', {})
-            if properties:
-                title = properties.get('title', 'Untitled Tab')
-                index = properties.get('index', 0)
-                response_parts.append(f'Tab Title: {title}')
-                response_parts.append(f'Tab Index: {index}')
-            
-            # Add tab content
-            tab_content = tab_info.get('content', [])
-            if tab_content:
-                response_parts.append('Tab Content:')
-                response_parts.extend(tab_content)
-            
-            # Check for child tabs
-            child_tabs = tab_info.get('child_tabs', {})
-            if child_tabs:
-                response_parts.append(f'\nChild Tabs ({len(child_tabs)}):')
-                for child_id, child_info in child_tabs.items():
-                    child_properties = child_info.get('properties', {})
-                    child_title = child_properties.get('title', 'Untitled Child Tab')
-                    response_parts.append(f'  - Child Tab ID: {child_id} - Title: {child_title}')
-                    
-                    child_content = child_info.get('content', [])
-                    if child_content:
-                        response_parts.append('    Child Tab Content:')
-                        response_parts.extend(['    ' + line for line in child_content])
         else:
-            # Tab not found, list available tabs
-            response_parts.append(f'--- TAB NOT FOUND: {tab_id} ---')
-            response_parts.append('\nAvailable tabs in this document:')
+            # Look for main tab or search through all tabs and subtabs
+            found_content = False
             
-            if tabs_data:
+            # Try exact match on main tabs first
+            if tab_id in tabs_data:
+                tab_info = tabs_data[tab_id]
+                tab_properties = tab_info.get('properties', {})
+                tab_title = tab_properties.get('title', 'Untitled Tab')
+                tab_index = tab_properties.get('index', 0)
+                
+                response_parts.extend([
+                    f'--- TAB FOUND: {tab_id} ---',
+                    f'Tab Title: {tab_title}',
+                    f'Tab Index: {tab_index}',
+                    '',
+                    '--- TAB CONTENT ---'
+                ])
+                
+                # Extract content for this tab
+                tab_content = tab_info.get('content', [])
+                if tab_content:
+                    response_parts.extend(tab_content)
+                else:
+                    response_parts.append('No content found in this tab.')
+                
+                # Show child tabs if any
+                child_tabs = tab_info.get('child_tabs', {})
+                if child_tabs:
+                    response_parts.extend(['', '--- CHILD TABS ---'])
+                    for child_id, child_info in child_tabs.items():
+                        child_properties = child_info.get('properties', {})
+                        child_title = child_properties.get('title', 'Untitled Child Tab')
+                        response_parts.append(f'  - Child Tab ID: {child_id} | Title: "{child_title}"')
+                
+                found_content = True
+            
+            # If not found as main tab, search through all subtabs
+            if not found_content:
+                for parent_id, parent_tab in tabs_data.items():
+                    child_tabs = parent_tab.get('child_tabs', {})
+                    if tab_id in child_tabs:
+                        parent_properties = parent_tab.get('properties', {})
+                        parent_title = parent_properties.get('title', 'Untitled Tab')
+                        
+                        subtab_info = child_tabs[tab_id]
+                        subtab_properties = subtab_info.get('properties', {})
+                        subtab_title = subtab_properties.get('title', 'Untitled Subtab')
+                        
+                        response_parts.extend([
+                            f'--- SUBTAB FOUND: {tab_id} ---',
+                            f'Parent Tab: {parent_title} (ID: {parent_id})',
+                            f'Subtab Title: {subtab_title}',
+                            '',
+                            '--- SUBTAB CONTENT ---'
+                        ])
+                        
+                        subtab_content = subtab_info.get('content', [])
+                        if subtab_content:
+                            response_parts.extend(subtab_content)
+                        else:
+                            response_parts.append('No content found in this subtab.')
+                        
+                        found_content = True
+                        break
+            
+            # If still not found, show available tabs
+            if not found_content:
+                response_parts.extend([
+                    f'--- TAB NOT FOUND: {tab_id} ---',
+                    '',
+                    'Available tabs in this document:'
+                ])
+                
                 for available_tab_id, tab_info in tabs_data.items():
-                    properties = tab_info.get('properties', {})
-                    title = properties.get('title', 'Untitled Tab')
-                    index = properties.get('index', 0)
-                    response_parts.append(f'- Tab ID: {available_tab_id} | Title: "{title}" | Index: {index}')
+                    tab_properties = tab_info.get('properties', {})
+                    tab_title = tab_properties.get('title', 'Untitled Tab')
+                    response_parts.append(f'- Tab ID: {available_tab_id} | Title: "{tab_title}" | Index: {tab_properties.get("index", 0)}')
                     
                     child_tabs = tab_info.get('child_tabs', {})
                     if child_tabs:
@@ -738,13 +734,17 @@ async def get_specific_tab_content(
                             child_properties = child_info.get('properties', {})
                             child_title = child_properties.get('title', 'Untitled Child Tab')
                             response_parts.append(f'  - Child Tab ID: {child_id} | Title: "{child_title}"')
-            else:
-                response_parts.append('No tabs found in this document.')
         
         return '\n'.join(response_parts)
         
     except Exception as e:
         return f"Error reading document tab: {str(e)}"
+
+
+# Removed redundant search_subtabs function - functionality consolidated into get_tab_content
+
+
+# Removed redundant get_specific_tab_content function - functionality consolidated into get_tab_content
 
 
 @server.tool()
