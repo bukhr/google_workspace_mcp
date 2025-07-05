@@ -14,6 +14,7 @@ from googleapiclient.errors import HttpError
 from auth.service_decorator import require_google_service
 from core.server import server
 from core.utils import handle_http_errors
+from core.comments import create_comment_tools
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -336,5 +337,15 @@ async def create_sheet(
 
     logger.info(f"Successfully created sheet for {user_google_email}. Sheet ID: {sheet_id}")
     return text_output
+
+
+# Create comment management tools for sheets
+_comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
+
+# Extract and register the functions
+read_sheet_comments = _comment_tools['read_comments']
+create_sheet_comment = _comment_tools['create_comment'] 
+reply_to_sheet_comment = _comment_tools['reply_to_comment']
+resolve_sheet_comment = _comment_tools['resolve_comment']
 
 

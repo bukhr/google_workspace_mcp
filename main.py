@@ -34,10 +34,17 @@ except Exception as e:
     sys.stderr.write(f"CRITICAL: Failed to set up file logging to '{log_file_path}': {e}\n")
 
 def safe_print(text):
+    # Don't print to stderr when running as MCP server via uvx to avoid JSON parsing errors
+    # Check if we're running as MCP server (no TTY and uvx in process name)
+    if not sys.stderr.isatty():
+        # Running as MCP server, suppress output to avoid JSON parsing errors
+        logger.debug(f"[MCP Server] {text}")
+        return
+    
     try:
-        print(text)
+        print(text, file=sys.stderr)
     except UnicodeEncodeError:
-        print(text.encode('ascii', errors='replace').decode())
+        print(text.encode('ascii', errors='replace').decode(), file=sys.stderr)
 
 def main():
     """
@@ -47,7 +54,7 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Google Workspace MCP Server')
     parser.add_argument('--single-user', action='store_true',
-                        help='Run in single-user mode - bypass session mapping and use any credentials from ./credentials directory')
+                        help='Run in single-user mode - bypass session mapping and use any credentials from the credentials directory')
     parser.add_argument('--tools', nargs='*',
                         choices=['gmail', 'drive', 'calendar', 'docs', 'sheets', 'chat', 'forms', 'slides'],
                         help='Specify which tools to register. If not provided, all tools are registered.')
@@ -73,7 +80,7 @@ def main():
         safe_print(f"   🔐 OAuth Callback: {base_uri}:{port}/oauth2callback")
     safe_print(f"   👤 Mode: {'Single-user' if args.single_user else 'Multi-user'}")
     safe_print(f"   🐍 Python: {sys.version.split()[0]}")
-    print()
+    safe_print("")
 
     # Import tool modules to register them with the MCP server via decorators
     tool_imports = {
@@ -104,29 +111,29 @@ def main():
     for tool in tools_to_import:
         tool_imports[tool]()
         safe_print(f"   {tool_icons[tool]} {tool.title()} - Google {tool.title()} API integration")
-    print()
+    safe_print("")
 
     safe_print(f"📊 Configuration Summary:")
     safe_print(f"   🔧 Tools Enabled: {len(tools_to_import)}/{len(tool_imports)}")
     safe_print(f"   🔑 Auth Method: OAuth 2.0 with PKCE")
     safe_print(f"   📝 Log Level: {logging.getLogger().getEffectiveLevel()}")
-    print()
+    safe_print("")
 
     # Set global single-user mode flag
     if args.single_user:
         os.environ['MCP_SINGLE_USER_MODE'] = '1'
         safe_print("🔐 Single-user mode enabled")
-        print()
+        safe_print("")
 
     # Check credentials directory permissions before starting
     try:
         safe_print("🔍 Checking credentials directory permissions...")
         check_credentials_directory_permissions()
         safe_print("✅ Credentials directory permissions verified")
-        print()
+        safe_print("")
     except (PermissionError, OSError) as e:
         safe_print(f"❌ Credentials directory permission check failed: {e}")
-        print("   Please ensure the service has write permissions to create/access the .credentials directory")
+        safe_print("   Please ensure the service has write permissions to create/access the credentials directory")
         logger.error(f"Failed credentials directory permission check: {e}")
         sys.exit(1)
 
@@ -141,12 +148,12 @@ def main():
             # Start minimal OAuth callback server for stdio mode
             from auth.oauth_callback_server import ensure_oauth_callback_available
             if ensure_oauth_callback_available('stdio', port, base_uri):
-                print(f"   OAuth callback server started on {base_uri}:{port}/oauth2callback")
+                safe_print(f"   OAuth callback server started on {base_uri}:{port}/oauth2callback")
             else:
                 safe_print("   ⚠️  Warning: Failed to start OAuth callback server")
 
-        print("   Ready for MCP connections!")
-        print()
+        safe_print("   Ready for MCP connections!")
+        safe_print("")
 
         if args.transport == 'streamable-http':
             # The server is already configured with port and server_url in core/server.py

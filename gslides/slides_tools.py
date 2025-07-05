@@ -14,6 +14,7 @@ from googleapiclient.errors import HttpError
 from auth.service_decorator import require_google_service
 from core.server import server
 from core.utils import handle_http_errors
+from core.comments import create_comment_tools
 
 logger = logging.getLogger(__name__)
 
@@ -270,3 +271,17 @@ You can view or download the thumbnail using the provided URL."""
     
     logger.info(f"Thumbnail generated successfully for {user_google_email}")
     return confirmation_message
+
+
+# Create comment management tools for slides
+_comment_tools = create_comment_tools("presentation", "presentation_id")
+read_presentation_comments = _comment_tools['read_comments']
+create_presentation_comment = _comment_tools['create_comment']
+reply_to_presentation_comment = _comment_tools['reply_to_comment']
+resolve_presentation_comment = _comment_tools['resolve_comment']
+
+# Aliases for backwards compatibility and intuitive naming
+read_slide_comments = read_presentation_comments
+create_slide_comment = create_presentation_comment
+reply_to_slide_comment = reply_to_presentation_comment
+resolve_slide_comment = resolve_presentation_comment
