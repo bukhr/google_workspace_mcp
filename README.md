@@ -67,7 +67,7 @@ Debes ingresar tu correo de Buk.
         "env": {
           "OAUTHLIB_INSECURE_TRANSPORT": "1",
           "WORKSPACE_MCP_BASE_URI": "http://localhost",
-          "WORKSPACE_MCP_PORT": "8080",
+          "WORKSPACE_MCP_PORT": "8000",
           "USER_GOOGLE_EMAIL": "tucorreo@buk.cl"
         }
       }
