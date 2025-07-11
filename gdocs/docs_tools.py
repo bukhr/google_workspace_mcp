@@ -167,7 +167,7 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
         
         return content
     
-    def process_paragraph(paragraph):
+    def process_paragraph(paragraph, inline_objects=None):
         """Process a paragraph element and return formatted text."""
         para_elements = paragraph.get('elements', [])
         paragraph_text = ""
@@ -176,10 +176,31 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
             if 'textRun' in pe:
                 paragraph_text += process_text_run(pe['textRun'])
             elif 'inlineObjectElement' in pe:
-                # Handle images and other inline objects
+                # Handle images and other inline objects with rich information
                 inline_obj = pe['inlineObjectElement']
                 object_id = inline_obj.get('inlineObjectId', '')
-                paragraph_text += f"[IMAGE: {object_id}]"
+                
+                # Try to get image URI from inline_objects
+                if inline_objects and object_id in inline_objects:
+                    inline_data = inline_objects[object_id]
+                    embedded_obj = inline_data.get('inlineObjectProperties', {}).get('embeddedObject', {})
+                    image_props = embedded_obj.get('imageProperties', {})
+                    content_uri = image_props.get('contentUri', '')
+                    
+                    # Get additional image properties for better display
+                    title = embedded_obj.get('title', '')
+                    description = embedded_obj.get('description', '')
+                    
+                    if content_uri:
+                        # Display the image inline using markdown syntax
+                        alt_text = title or description or f"Image {object_id}"
+                        paragraph_text += f"![{alt_text}]({content_uri})"
+                    else:
+                        # Fallback if no URI available
+                        paragraph_text += f"[IMAGE: {object_id}]"
+                else:
+                    # Fallback to basic format if no inline_objects data available
+                    paragraph_text += f"[IMAGE: {object_id}]"
             elif 'pageBreak' in pe:
                 paragraph_text += "[PAGE BREAK]"
             elif 'columnBreak' in pe:
@@ -219,7 +240,7 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
         
         return paragraph_text.rstrip('\n')
     
-    def process_table(table):
+    def process_table(table, inline_objects=None):
         """Process a table element and return formatted table."""
         table_content = []
         table_content.append("\n[TABLE]")
@@ -235,7 +256,7 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
                 
                 for element in cell_body:
                     if 'paragraph' in element:
-                        cell_text = process_paragraph(element['paragraph'])
+                        cell_text = process_paragraph(element['paragraph'], inline_objects)
                         if cell_text.strip():
                             cell_content.append(cell_text)
                 
@@ -250,18 +271,18 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
         table_content.append("[/TABLE]\n")
         return '\n'.join(table_content)
     
-    def process_content_elements(content_elements, indent=""):
+    def process_content_elements(content_elements, indent="", inline_objects=None):
         """Process a list of content elements (paragraphs, tables, etc.)."""
         processed = []
         
         for element in content_elements:
             if 'paragraph' in element:
-                para_text = process_paragraph(element['paragraph'])
+                para_text = process_paragraph(element['paragraph'], inline_objects)
                 if para_text.strip():
                     processed.append(f"{indent}{para_text}")
             
             elif 'table' in element:
-                table_text = process_table(element['table'])
+                table_text = process_table(element['table'], inline_objects)
                 processed.append(f"{indent}{table_text}")
             
             elif 'sectionBreak' in element:
@@ -272,7 +293,7 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
         
         return processed
     
-    def extract_document_metadata(doc_data):
+    def extract_document_metadata(doc_data, inline_objects=None):
         """Extract additional document metadata and properties."""
         metadata = []
         
@@ -305,7 +326,7 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
                 footnote_text = []
                 for element in content:
                     if 'paragraph' in element:
-                        footnote_text.append(process_paragraph(element['paragraph']))
+                        footnote_text.append(process_paragraph(element['paragraph'], inline_objects))
                 metadata.append(f"Footnote {footnote_id}: {''.join(footnote_text)}")
         
         # Extract document style information
@@ -339,6 +360,9 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
         
         return '\n'.join(metadata) if metadata else ""
     
+    # Extract inline objects for rich image processing
+    inline_objects = doc_data.get('inlineObjects', {})
+    
     # Process document content
     processed_content = []
     processed_content.append('--- CONTENIDO ---')
@@ -348,7 +372,7 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
     if body:
         main_content = body.get('content', [])
         if main_content:
-            processed_content.extend(process_content_elements(main_content))
+            processed_content.extend(process_content_elements(main_content, inline_objects=inline_objects))
     
     # Structure tabs data for easy access
     tabs_data = {}
@@ -378,10 +402,12 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
             # Process tab content
             document_tab = tab.get('documentTab', {})
             if document_tab:
+                # Get tab-specific inline objects if available, otherwise use document-level ones
+                tab_inline_objects = document_tab.get('inlineObjects', inline_objects)
                 body_content = document_tab.get('body', {}).get('content', [])
                 if body_content:
                     processed_content.append("Contenido de Pestaña:")
-                    tab_processed = process_content_elements(body_content, "  ")
+                    tab_processed = process_content_elements(body_content, "  ", tab_inline_objects)
                     processed_content.extend(tab_processed)
                     tab_info['content'] = tab_processed
             
@@ -395,10 +421,12 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
                     
                     child_doc_tab = child_tab.get('documentTab', {})
                     if child_doc_tab:
+                        # Get child tab-specific inline objects if available, otherwise use document-level ones
+                        child_inline_objects = child_doc_tab.get('inlineObjects', inline_objects)
                         child_body = child_doc_tab.get('body', {}).get('content', [])
                         if child_body:
                             processed_content.append("  Contenido de Pestaña Secundaria:")
-                            child_processed = process_content_elements(child_body, "    ")
+                            child_processed = process_content_elements(child_body, "    ", child_inline_objects)
                             processed_content.extend(child_processed)
                             
                             # Store child tab data
@@ -411,7 +439,7 @@ def _extract_document_content_with_tabs(docs_service, document_id: str) -> Dict[
             tabs_data[tab_id] = tab_info
     
     # Extract document metadata
-    metadata = extract_document_metadata(doc_data)
+    metadata = extract_document_metadata(doc_data, inline_objects)
     if metadata:
         processed_content.append("\n=== METADATOS DEL DOCUMENTO ===")
         processed_content.append(metadata)
@@ -492,6 +520,7 @@ def _get_tab_content_lightweight(docs_service, document_id: str, tab_id: str) ->
                     return {
                         'tab_data': tab,
                         'doc_title': full_doc.get('title', 'Unknown Document'),
+                        'inline_objects': full_doc.get('inlineObjects', {}),
                         'timestamp': datetime.now()
                     }
         
@@ -574,6 +603,7 @@ async def get_tab_content(
                 logger.info(f"[get_tab_content] Successfully loaded tab {tab_id} using lightweight method")
                 tab_data = lightweight_result.get('tab_data', {})
                 doc_title = lightweight_result.get('doc_title', 'Unknown Document')
+                inline_objects = lightweight_result.get('inline_objects', {})
                 doc_link = f"https://docs.google.com/document/d/{document_id}/edit?usp=drivesdk"
                 
                 tab_properties = tab_data.get('tabProperties', {})
@@ -600,7 +630,7 @@ async def get_tab_content(
                         # We need to define process_content_elements here since we're not loading the full doc
                         from core.utils import extract_office_xml_text
                         
-                        def process_content_elements(elements, indent=""):
+                        def process_content_elements(elements, indent="", inline_objects=None):
                             """Simplified content processing for lightweight mode"""
                             processed = []
                             for element in elements:
@@ -633,6 +663,32 @@ async def get_tab_content(
                                             else:
                                                 # Regular text content
                                                 line_content.append(text_content)
+                                        elif 'inlineObjectElement' in para_element:
+                                            # Handle images with rich information
+                                            inline_obj = para_element['inlineObjectElement']
+                                            object_id = inline_obj.get('inlineObjectId', '')
+                                            
+                                            # Try to get image URI from inline_objects
+                                            if inline_objects and object_id in inline_objects:
+                                                inline_data = inline_objects[object_id]
+                                                embedded_obj = inline_data.get('inlineObjectProperties', {}).get('embeddedObject', {})
+                                                image_props = embedded_obj.get('imageProperties', {})
+                                                content_uri = image_props.get('contentUri', '')
+                                                
+                                                # Get additional image properties for better display
+                                                title = embedded_obj.get('title', '')
+                                                description = embedded_obj.get('description', '')
+                                                
+                                                if content_uri:
+                                                    # Display the image inline using markdown syntax
+                                                    alt_text = title or description or f"Image {object_id}"
+                                                    line_content.append(f"![{alt_text}]({content_uri})")
+                                                else:
+                                                    # Fallback if no URI available
+                                                    line_content.append(f"[IMAGE: {object_id}]")
+                                            else:
+                                                # Fallback to basic format
+                                                line_content.append(f"[IMAGE: {object_id}]")
                                     
                                     if line_content:
                                         processed.append(indent + ''.join(line_content).strip())
@@ -643,7 +699,9 @@ async def get_tab_content(
                             
                             return processed
                         
-                        processed_content = process_content_elements(body_content, "")
+                        # Get tab-specific inline objects if available, otherwise use document-level ones
+                        tab_inline_objects = document_tab.get('inlineObjects', inline_objects)
+                        processed_content = process_content_elements(body_content, "", tab_inline_objects)
                         response_parts.extend(processed_content)
                     else:
                         response_parts.append('No content found in this tab.')
