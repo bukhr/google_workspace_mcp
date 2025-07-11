@@ -1022,6 +1022,191 @@ async def reply_to_comment(
 
 
 @server.tool()
+@require_multiple_services([
+    {"service_type": "docs", "scopes": "docs_write", "param_name": "docs_service"},
+    {"service_type": "drive", "scopes": "drive_file", "param_name": "drive_service"}
+])
+@handle_http_errors("edit_tab_content")
+async def edit_tab_content(
+    docs_service,
+    drive_service,
+    user_google_email: str,
+    document_id: str,
+    tab_identifier: str,
+    content_to_add: str,
+    position: str = "end",
+    parent_tab_id: Optional[str] = None,
+    search_by_name: bool = False,
+) -> str:
+    """
+    Edit content directly in a specific tab of a Google document.
+    
+    Args:
+        docs_service: Google Docs service instance
+        drive_service: Google Drive service instance
+        user_google_email: The user's Google email address
+        document_id: The ID of the Google Document
+        tab_identifier: Tab ID, subtab ID, tab name, or Google Docs URL with tab parameter
+        content_to_add: The content to add to the tab
+        position: Where to add the content ("end", "beginning", or "replace")
+        parent_tab_id: Optional parent tab ID (required for subtabs)
+        search_by_name: If True, searches for tabs/subtabs by name instead of ID
+    
+    Returns:
+        str: Confirmation message with edit details.
+    """
+    logger.info(f"[edit_tab_content] Editing content in tab {tab_identifier} of document {document_id}")
+    
+    try:
+        # First, get the document to understand its structure
+        doc_data = await asyncio.to_thread(
+            docs_service.documents().get(
+                documentId=document_id,
+                includeTabsContent=True
+            ).execute
+        )
+        
+        # Extract tab ID from URL if needed
+        tab_id = _extract_tab_id_from_url(tab_identifier)
+        
+        # Find the target tab
+        target_tab = None
+        tabs = doc_data.get('tabs', [])
+        
+        if search_by_name:
+            # Search by name (case-insensitive partial match)
+            for tab in tabs:
+                tab_properties = tab.get('tabProperties', {})
+                tab_title = tab_properties.get('title', '')
+                if tab_identifier.lower() in tab_title.lower():
+                    target_tab = tab
+                    tab_id = tab_properties.get('tabId')
+                    break
+                    
+                # Check child tabs if this is a parent tab
+                child_tabs = tab.get('childTabs', [])
+                for child_tab in child_tabs:
+                    child_properties = child_tab.get('tabProperties', {})
+                    child_title = child_properties.get('title', '')
+                    if tab_identifier.lower() in child_title.lower():
+                        target_tab = child_tab
+                        tab_id = child_properties.get('tabId')
+                        break
+                if target_tab:
+                    break
+        else:
+            # Search by ID
+            for tab in tabs:
+                tab_properties = tab.get('tabProperties', {})
+                if tab_properties.get('tabId') == tab_id:
+                    target_tab = tab
+                    break
+                    
+                # Check child tabs
+                child_tabs = tab.get('childTabs', [])
+                for child_tab in child_tabs:
+                    child_properties = child_tab.get('tabProperties', {})
+                    if child_properties.get('tabId') == tab_id:
+                        target_tab = child_tab
+                        break
+                if target_tab:
+                    break
+        
+        if not target_tab:
+            available_tabs = []
+            for tab in tabs:
+                tab_props = tab.get('tabProperties', {})
+                tab_title = tab_props.get('title', 'Untitled')
+                tab_id_str = tab_props.get('tabId', 'unknown')
+                available_tabs.append(f"- {tab_title} (ID: {tab_id_str})")
+                
+                # Add child tabs
+                child_tabs = tab.get('childTabs', [])
+                for child_tab in child_tabs:
+                    child_props = child_tab.get('tabProperties', {})
+                    child_title = child_props.get('title', 'Untitled')
+                    child_id = child_props.get('tabId', 'unknown')
+                    available_tabs.append(f"  - {child_title} (ID: {child_id}) [subtab]")
+            
+            return f"Tab '{tab_identifier}' not found in document {document_id}.\n\nAvailable tabs:\n" + "\n".join(available_tabs)
+        
+        # Get the tab content to find the end position
+        tab_content = target_tab.get('documentTab', {}).get('body', {}).get('content', [])
+        
+        # Find the insertion point based on position
+        if position == "end":
+            # Use a much more conservative approach for tab insertion
+            # Start from a safe position and work backwards
+            end_index = 1  # Default safe position
+            
+            # Find the last paragraph element specifically
+            for element in reversed(tab_content):
+                if 'paragraph' in element and 'endIndex' in element:
+                    # Use a very conservative offset from the paragraph end
+                    end_index = max(1, element['endIndex'] - 3)
+                    break
+            
+            # If no paragraph found, try any element with endIndex
+            if end_index == 1:
+                for element in reversed(tab_content):
+                    if 'endIndex' in element and element['endIndex'] > 10:
+                        # Use a very safe position well before the end
+                        end_index = max(1, element['endIndex'] - 10)
+                        break
+        elif position == "beginning":
+            # Insert at the beginning of the tab content
+            end_index = 1
+        else:
+            return f"Position '{position}' not supported. Use 'end' or 'beginning'."
+        
+        # Prepare the batch update request
+        requests = []
+        
+        # Add a newline before the content if we're adding at the end and there's existing content
+        if position == "end" and end_index > 1:
+            content_to_insert = "\n" + content_to_add
+        else:
+            content_to_insert = content_to_add
+        
+        # Create the insert text request
+        insert_request = {
+            'insertText': {
+                'location': {
+                    'index': end_index,
+                    'tabId': tab_id
+                },
+                'text': content_to_insert
+            }
+        }
+        requests.append(insert_request)
+        
+        # Execute the batch update
+        await asyncio.to_thread(
+            docs_service.documents().batchUpdate(
+                documentId=document_id,
+                body={'requests': requests}
+            ).execute
+        )
+        
+        # Clear the document cache to ensure fresh content on next read
+        if document_id in _document_cache:
+            del _document_cache[document_id]
+            logger.info(f"Cleared cache for document {document_id}")
+        
+        tab_title = target_tab.get('tabProperties', {}).get('title', 'Unknown')
+        return f"Successfully added content to tab '{tab_title}' (ID: {tab_id}) at position '{position}' in document {document_id}.\n\nContent added: {content_to_add}"
+        
+    except HttpError as e:
+        error_msg = f"HTTP error while editing tab content: {e}"
+        logger.error(error_msg)
+        return error_msg
+    except Exception as e:
+        error_msg = f"Error editing tab content: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return error_msg
+
+
+@server.tool()
 @require_google_service("drive", "drive_file")
 @handle_http_errors("create_doc_comment")
 async def create_doc_comment(

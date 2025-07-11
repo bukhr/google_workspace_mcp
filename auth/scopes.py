@@ -19,9 +19,13 @@ OPENID_SCOPE = 'openid'
 CALENDAR_READONLY_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly'
 CALENDAR_EVENTS_SCOPE = 'https://www.googleapis.com/auth/calendar.events'
 
+# Google Docs
+DOCS_SCOPE = 'https://www.googleapis.com/auth/docs'
+
 # Google Drive scopes
 DRIVE_READONLY_SCOPE = 'https://www.googleapis.com/auth/drive.readonly'
 DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
+DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive'
 
 # Google Docs scopes
 DOCS_READONLY_SCOPE = 'https://www.googleapis.com/auth/documents.readonly'
@@ -71,7 +75,9 @@ CALENDAR_SCOPES = [
 
 DRIVE_SCOPES = [
     DRIVE_READONLY_SCOPE,
-    DRIVE_FILE_SCOPE
+    DRIVE_FILE_SCOPE,
+    DRIVE_SCOPE,
+    DOCS_SCOPE
 ]
 
 GMAIL_SCOPES = [
